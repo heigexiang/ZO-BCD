@@ -1,0 +1,38 @@
+nohup: ignoring input
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:00<00:00,  1.41it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:01<00:00,  2.10it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:01<00:00,  1.96it/s]
+Iteration 0: Validation loss 0.2501984238624573
+Iteration 1: Validation loss 0.24060770869255066
+Iteration 2: Validation loss 0.28745365142822266
+Iteration 3: Validation loss 0.2826678156852722
+Iteration 4: Validation loss 0.30187296867370605
+Iteration 5: Validation loss 0.30611321330070496
+Iteration 6: Validation loss 0.2909913659095764
+Iteration 7: Validation loss 0.30376678705215454
+Iteration 8: Validation loss 0.2898460924625397
+Iteration 9: Validation loss 0.30900439620018005
+Iteration 10: Validation loss 0.2954898178577423
+Iteration 11: Validation loss 0.2874751687049866
+Iteration 12: Validation loss 0.2734423875808716
+Iteration 13: Validation loss 0.29128149151802063
+Iteration 14: Validation loss 0.2695830762386322
+Iteration 15: Validation loss 0.30736029148101807
+Iteration 16: Validation loss 0.28172188997268677
+Iteration 17: Validation loss 0.3396705687046051
+Iteration 18: Validation loss 0.3038889765739441
+Iteration 19: Validation loss 0.27926281094551086
+Iteration 20: Validation loss 0.25668030977249146
+Iteration 21: Validation loss 0.32149359583854675
+Iteration 22: Validation loss 0.283173531293869
+Iteration 23: Validation loss 0.2865639328956604
+Iteration 24: Validation loss 0.295659601688385
+Iteration 25: Validation loss 0.323093444108963
+Iteration 26: Validation loss 0.28774502873420715
+Iteration 27: Validation loss 0.30229830741882324
+Iteration 28: Validation loss 0.30649712681770325
+Iteration 29: Validation loss 0.3274027109146118
+Iteration 30: Validation loss 0.3224828839302063
+Iteration 31: Validation loss 0.2578972578048706
+Iteration 32: Validation loss 0.3053321838378906
+Iteration 33: Validation loss 0.34163177013397217
+/root/anaconda3/envs/gradio-vllm/lib/python3.10/multiprocessing/resource_tracker.py:224: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown
+  warnings.warn('resource_tracker: There appear to be %d '

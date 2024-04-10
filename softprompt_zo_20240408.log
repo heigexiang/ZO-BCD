@@ -1,0 +1,37 @@
+nohup: 忽略输入
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:00<00:00,  1.41it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:01<00:00,  2.10it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:01<00:00,  1.95it/s]
+Iteration 0: loss1 0.26041916012763977; loss2 0.2338484227657318
+Iteration 1: loss1 0.21626786887645721; loss2 0.2590610682964325
+Iteration 2: loss1 0.22241079807281494; loss2 0.2368655651807785
+Iteration 3: loss1 0.21877016127109528; loss2 0.20294924080371857
+Iteration 4: loss1 0.24681709706783295; loss2 0.23004896938800812
+Iteration 5: loss1 0.24434086680412292; loss2 0.24636992812156677
+Iteration 6: loss1 0.2280111312866211; loss2 0.23249278962612152
+Iteration 7: loss1 0.22641856968402863; loss2 0.21638526022434235
+Iteration 8: loss1 0.22324925661087036; loss2 0.23931096494197845
+Iteration 9: loss1 0.24022161960601807; loss2 0.22933071851730347; Validation loss 0.2798059284687042
+Iteration 10: loss1 0.22818982601165771; loss2 0.25634729862213135
+Iteration 11: loss1 0.24486683309078217; loss2 0.1992342323064804
+Iteration 12: loss1 0.2690790593624115; loss2 0.23193320631980896
+Iteration 13: loss1 0.24935472011566162; loss2 0.26000741124153137
+Iteration 14: loss1 0.23266799747943878; loss2 0.24416287243366241
+Iteration 15: loss1 0.2447238266468048; loss2 0.2402043342590332
+Iteration 16: loss1 0.21680471301078796; loss2 0.25204285979270935
+Iteration 17: loss1 0.2167411744594574; loss2 0.1886269450187683
+Iteration 18: loss1 0.23723913729190826; loss2 0.2015693485736847
+Iteration 19: loss1 0.22037172317504883; loss2 0.22871312499046326; Validation loss 0.31212830543518066
+Iteration 20: loss1 0.2390451282262802; loss2 0.23652514815330505
+Iteration 21: loss1 0.22152593731880188; loss2 0.20820237696170807
+Iteration 22: loss1 0.2392827868461609; loss2 0.25009119510650635
+Iteration 23: loss1 0.23842766880989075; loss2 0.25303763151168823
+Iteration 24: loss1 0.24494704604148865; loss2 0.251279354095459
+Iteration 25: loss1 0.2331317812204361; loss2 0.20486338436603546
+Iteration 26: loss1 0.23155122995376587; loss2 0.22854083776474
+Iteration 27: loss1 0.22043631970882416; loss2 0.2060157209634781
+Iteration 28: loss1 0.23881132900714874; loss2 0.2762776017189026
+Traceback (most recent call last):
+  File "/mnt/data/xue.w/yutong/ZO-BCD/softprompt_zo.py", line 312, in <module>
+    zero_order_adam_concurrent(peft_models, tokenizers, sys_prompt, soft_prompt, training_data=data_train, validation_data=data_test[:256], batchsize=256, epochs=epochs, learning_rate=learning_rate, variation_scale=variation_scale, n_GPU=8, output_dir=f'./results/tzo_adam_spt_lr_{learning_rate}_vs_{variation_scale}', save_per_epochs=1)
+  File "/mnt/data/xue.w/yutong/ZO-BCD/softprompt_zo.py", line 278, in zero_order_adam_concurrent
+    with open(os.path.join(output_dir, f"logs.pt"), "w") as f:
+FileNotFoundError: [Errno 2] No such file or directory: './results/tzo_adam_spt_lr_1e-05_vs_0.1/logs.pt'
