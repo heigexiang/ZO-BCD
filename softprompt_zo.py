@@ -15,6 +15,7 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
 # https://huggingface.co/blog/llama2#using-transformers
+print("Adam with central difference for ZO softprompt tuning, epoch-1, lr-1e-5, vs-1e-3, wd-1e-2")
 
 
 tiny_llama = "/mnt/xue.w/models/hub/models--TinyLlama--TinyLlama-1.1B-Chat-v1.0/snapshots/77e23968eed12d195bd46c519aa679cc22a27ddc"
@@ -222,6 +223,8 @@ def zero_order_softprompt_tuning_twopoints_concurrent(models, tokenizers, sys_pr
     return soft_prompt
 
 def zero_order_adam_concurrent(models, tokenizers, sys_prompt, soft_prompt, training_data, validation_data, batchsize, epochs, learning_rate, variation_scale, n_GPU, output_dir, save_per_epochs=1, validate_every=10):
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
     iter_per_epoch = len(training_data) // batchsize
     # get batched data
     # batched_data = [training_data[i:i+batchsize] for i in range(0, len(training_data), batchsize)]
@@ -243,6 +246,9 @@ def zero_order_adam_concurrent(models, tokenizers, sys_prompt, soft_prompt, trai
             data_temp = training_data[i*batchsize:(i+1)*batchsize]
             # get initial loss
             loss = compute_loss_concurrent(models, tokenizers, sys_prompt, soft_prompt, data_temp, batch_size=batchsize//n_GPU, n_GPU=n_GPU)
+            # check if loss is nan
+            if loss.isnan():
+                continue
             loss1.append(loss)
             # print(f'loss:{loss}')
             # random variation in softprompt as uniform unit ball distribution
@@ -252,6 +258,8 @@ def zero_order_adam_concurrent(models, tokenizers, sys_prompt, soft_prompt, trai
             # get variation sampling
             soft_prompt_plus = soft_prompt + random_variations
             loss_plus = compute_loss_concurrent(models, tokenizers, sys_prompt, soft_prompt_plus, data_temp, batch_size=batchsize//n_GPU, n_GPU=n_GPU)
+            if loss_plus.isnan():
+                continue
             loss2.append(loss_plus)
             # print(f'loss_plus:{loss_plus}')
             # get loss difference
@@ -276,13 +284,255 @@ def zero_order_adam_concurrent(models, tokenizers, sys_prompt, soft_prompt, trai
                 print(f"Iteration {i}: loss1 {loss}; loss2 {loss_plus}")
             iters += 1
     # if path does not exist, create the path
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-    with open(os.path.join(output_dir, f"logs.pt"), "w") as f:
+    
+    with open(os.path.join(output_dir, f"logs.pt"), "wb") as f:
         losses = {'loss1': loss1.copy(), 'loss2': loss2.copy(), 'loss3': loss3.copy()}
         pickle.dump(losses, f)
     # save the final softprompt
     torch.save(soft_prompt, os.path.join(output_dir, f"softprompt_epoch_{epochs}.pt"))
+    return soft_prompt
+
+def zero_order_adam_2c_concurrent(models, tokenizers, sys_prompt, soft_prompt, training_data, validation_data, batchsize, epochs, learning_rate, weight_decay, variation_scale, n_GPU, output_dir, save_per_epochs=1, validate_every=10):
+    soft_prompt_copy = soft_prompt.clone()
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    iter_per_epoch = len(training_data) // batchsize
+    # get batched data
+    # batched_data = [training_data[i:i+batchsize] for i in range(0, len(training_data), batchsize)]
+    # compute parameters in soft_prompt
+    dimension = soft_prompt.numel()
+    beta1 = 0.9
+    beta2 = 0.95
+    epsilon = 1e-6
+    m = torch.zeros_like(soft_prompt, dtype=torch.float32)
+    v = torch.zeros_like(soft_prompt, dtype=torch.float32)
+    loss1, loss2, loss3 = [], [], []
+    iters = 0
+    for e in range(epochs):
+        if e % save_per_epochs == 0 and e != 0:
+            torch.save(soft_prompt, os.path.join(output_dir, f"softprompt_epoch_{e}.pt"))
+        training_data = [training_data[i] for i in torch.randperm(len(training_data))]
+        for i in range(iter_per_epoch):
+            # print(soft_prompt.shape, soft_prompt.isnan().any(), soft_prompt.isinf().any(), (soft_prompt < 0).any())
+            data_temp = training_data[i*batchsize:(i+1)*batchsize]
+            
+            # random variation in softprompt as uniform unit ball distribution
+            random_directions = torch.randn_like(soft_prompt)
+            random_directions = random_directions / torch.norm(random_directions)
+            random_variations = random_directions * variation_scale
+            
+            soft_prompt_minus = soft_prompt - random_variations
+            # get loss1
+            loss_minus = compute_loss_concurrent(models, tokenizers, sys_prompt, soft_prompt_minus, data_temp, batch_size=batchsize//n_GPU, n_GPU=n_GPU)
+            # check if loss is nan
+            if loss_minus.isnan():
+                continue
+            loss1.append(loss_minus)
+            # print(f'loss:{loss}')
+            
+            # get variation sampling
+            soft_prompt_plus = soft_prompt + random_variations
+            loss_plus = compute_loss_concurrent(models, tokenizers, sys_prompt, soft_prompt_plus, data_temp, batch_size=batchsize//n_GPU, n_GPU=n_GPU)
+            if loss_plus.isnan():
+                continue
+            loss2.append(loss_plus)
+            # print(f'loss_plus:{loss_plus}')
+            # get loss difference
+            loss_diff = (loss_plus - loss_minus) / 2
+            # compute zero-order gradient
+            gradient = (loss_diff / variation_scale * (dimension)) * random_directions
+            # update softprompt
+            m = beta1 * m + (1 - beta1) * gradient
+            v = beta2 * v + (1 - beta2) * gradient ** 2
+            m_hat = m / (1 - beta1 ** (iters+1))
+            v_hat = v / (1 - beta2 ** (iters+1))
+            soft_prompt = soft_prompt - learning_rate * m_hat / (torch.sqrt(v_hat) + epsilon) - weight_decay * soft_prompt * learning_rate
+            # print(soft_prompt.shape, soft_prompt.isnan().any(), soft_prompt.isinf().any(), (soft_prompt < 0).any())
+            # print(m.isnan().any(), v.isnan().any(), m_hat.isnan().any(), v_hat.isnan().any(), (v_hat < 0).any())
+            # print(learning_rate, m_hat.abs().max(), torch.sqrt(v_hat).isnan().any(), torch.sqrt(v_hat).max()+epsilon)
+            # validation
+            if (iters + 1) % validate_every == 0:
+                validation_loss = compute_loss_concurrent(models, tokenizers, sys_prompt, soft_prompt, validation_data, batch_size=batchsize//n_GPU, n_GPU=n_GPU)
+                loss3.append(validation_loss)
+                print(f"Iteration {i}: loss1 {loss_minus}; loss2 {loss_plus}; Validation loss {validation_loss}")
+                sqdim = torch.sqrt(torch.tensor(dimension * 1.0))
+                pmp_scale = torch.norm(soft_prompt)**2 / sqdim
+                update_scale = torch.norm(m_hat * learning_rate / (torch.sqrt(v_hat) + epsilon)) / sqdim
+                print(f"Update scale:{update_scale}; Softprompt scale: {pmp_scale}")
+                # check if soft_prompt is different from soft_prompt_copy
+                print("Different? ", (soft_prompt != soft_prompt_copy).any())
+                # print avg norm
+                print(f"Softprompt norm: {torch.norm(soft_prompt)**2 / sqdim}")
+            else:
+                print(f"Iteration {i}: loss1 {loss_minus}; loss2 {loss_plus}")
+            iters += 1
+    # if path does not exist, create the path
+    
+    with open(os.path.join(output_dir, f"logs.pt"), "wb") as f:
+        losses = {'loss1': loss1.copy(), 'loss2': loss2.copy(), 'loss3': loss3.copy()}
+        pickle.dump(losses, f)
+    # save the final softprompt
+    torch.save(soft_prompt, os.path.join(output_dir, f"softprompt_epoch_{epochs}.pt"))
+    return soft_prompt
+
+def zero_order_msgd_concurrent(models, tokenizers, sys_prompt, soft_prompt, training_data, validation_data, batchsize, epochs, learning_rate, beta1, weight_decay, variation_scale, n_GPU, output_dir, save_per_epochs=1, validate_every=10):
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    iter_per_epoch = len(training_data) // batchsize
+    true_epochs = epochs
+    if epochs < 1:
+        iter_per_epoch = int(len(training_data)*epochs // batchsize)
+        epochs = 1
+    # get batched data
+    # batched_data = [training_data[i:i+batchsize] for i in range(0, len(training_data), batchsize)]
+    # compute parameters in soft_prompt
+    dimension = soft_prompt.numel()
+    m = torch.zeros_like(soft_prompt, dtype=torch.float32)
+    loss1, loss2, loss3 = [], [], []
+    iters = 0
+    for e in range(epochs):
+        if e % save_per_epochs == 0 and e != 0:
+            torch.save(soft_prompt, os.path.join(output_dir, f"softprompt_epoch_{e}.pt"))
+        training_data = [training_data[i] for i in torch.randperm(len(training_data))]
+        for i in range(iter_per_epoch):
+            # print(soft_prompt.shape, soft_prompt.isnan().any(), soft_prompt.isinf().any(), (soft_prompt < 0).any())
+            data_temp = training_data[i*batchsize:(i+1)*batchsize]
+            
+            # random variation in softprompt as uniform unit ball distribution
+            random_directions = torch.randn_like(soft_prompt)
+            random_directions = random_directions / torch.norm(random_directions)
+            random_variations = random_directions * variation_scale
+
+            soft_prompt_minus = soft_prompt - random_variations
+            # get loss1
+            loss_minus = compute_loss_concurrent(models, tokenizers, sys_prompt, soft_prompt_minus, data_temp, batch_size=batchsize//n_GPU, n_GPU=n_GPU)
+            # check if loss is nan
+            if loss_minus.isnan():
+                continue
+            loss1.append(loss_minus)
+            # print(f'loss:{loss}')
+            
+            # get variation sampling
+            soft_prompt_plus = soft_prompt + random_variations
+            loss_plus = compute_loss_concurrent(models, tokenizers, sys_prompt, soft_prompt_plus, data_temp, batch_size=batchsize//n_GPU, n_GPU=n_GPU)
+            if loss_plus.isnan():
+                continue
+            loss2.append(loss_plus)
+            # print(f'loss_plus:{loss_plus}')
+            # get loss difference
+            loss_diff = (loss_plus - loss_minus) / 2
+            # compute zero-order gradient
+            gradient = (loss_diff / variation_scale * (dimension * learning_rate)) * random_directions
+            # update softprompt
+            m = beta1 * m + (1 - beta1) * gradient
+            m_hat = m / (1 - beta1 ** (iters+1))
+            soft_prompt = soft_prompt - m_hat - weight_decay * soft_prompt * learning_rate
+            # print(soft_prompt.shape, soft_prompt.isnan().any(), soft_prompt.isinf().any(), (soft_prompt < 0).any())
+            # print(m.isnan().any(), v.isnan().any(), m_hat.isnan().any(), v_hat.isnan().any(), (v_hat < 0).any())
+            # print(learning_rate, m_hat.abs().max(), torch.sqrt(v_hat).isnan().any(), torch.sqrt(v_hat).max()+epsilon)
+            # validation
+            if (iters + 1) % validate_every == 0:
+                validation_loss = compute_loss_concurrent(models, tokenizers, sys_prompt, soft_prompt, validation_data, batch_size=batchsize//n_GPU, n_GPU=n_GPU)
+                loss3.append(validation_loss)
+                print(f"Iteration {i}: loss1 {loss_minus}; loss2 {loss_plus}; Validation loss {validation_loss}")
+                sqdim = torch.sqrt(torch.tensor(dimension * 1.0))
+                grad_scale = torch.norm(gradient) / sqdim
+                pmp_scale = torch.norm(soft_prompt) / sqdim
+                update_scale = torch.norm(m_hat) / sqdim
+                print(f"Lr*Gradient scale: {grad_scale}; Update scale:{update_scale}; Softprompt scale: {pmp_scale}")
+            else:
+                print(f"Iteration {i}: loss1 {loss_minus}; loss2 {loss_plus}")
+            iters += 1
+    # if path does not exist, create the path
+    
+    with open(os.path.join(output_dir, f"logs.pt"), "wb") as f:
+        losses = {'loss1': loss1.copy(), 'loss2': loss2.copy(), 'loss3': loss3.copy()}
+        pickle.dump(losses, f)
+    # save the final softprompt
+    torch.save(soft_prompt, os.path.join(output_dir, f"softprompt_epoch_{true_epochs}.pt"))
+    return soft_prompt
+
+def zero_order_proj_msgd_concurrent(models, tokenizers, sys_prompt, project_matrix, soft_prompt_proj, training_data, validation_data, batchsize, epochs, learning_rate, beta1, weight_decay, variation_scale, n_GPU, output_dir, save_per_epochs=1, validate_every=10):
+    if soft_prompt_proj is None:
+        soft_prompt_proj = torch.randn(1, 7, 10) / 10
+    if project_matrix is None:
+        project_matrix = torch.randn(soft_prompt_proj.size(0), soft_prompt_proj.size(2), 4096)
+    soft_prompt = torch.matmul(soft_prompt_proj, project_matrix)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    iter_per_epoch = len(training_data) // batchsize
+    true_epochs = epochs
+    if epochs < 1:
+        iter_per_epoch = int(len(training_data)*epochs // batchsize)
+        epochs = 1
+    # get batched data
+    # batched_data = [training_data[i:i+batchsize] for i in range(0, len(training_data), batchsize)]
+    # compute parameters in soft_prompt
+    dimension = soft_prompt_proj.numel()
+    m = torch.zeros_like(soft_prompt_proj, dtype=torch.float32)
+    loss1, loss2, loss3 = [], [], []
+    iters = 0
+    for e in range(epochs):
+        if e % save_per_epochs == 0 and e != 0:
+            torch.save(soft_prompt, os.path.join(output_dir, f"softprompt_epoch_{e}.pt"))
+        training_data = [training_data[i] for i in torch.randperm(len(training_data))]
+        for i in range(iter_per_epoch):
+            # print(soft_prompt.shape, soft_prompt.isnan().any(), soft_prompt.isinf().any(), (soft_prompt < 0).any())
+            data_temp = training_data[i*batchsize:(i+1)*batchsize]
+            
+            # random variation in softprompt as uniform unit ball distribution
+            random_directions = torch.randn_like(soft_prompt_proj)
+            random_directions = random_directions / torch.norm(random_directions)
+            random_variations = random_directions * variation_scale
+
+            soft_prompt_minus = soft_prompt - torch.matmul(random_variations, project_matrix)
+            # get loss1
+            loss_minus = compute_loss_concurrent(models, tokenizers, sys_prompt, soft_prompt_minus, data_temp, batch_size=batchsize//n_GPU, n_GPU=n_GPU)
+            # check if loss is nan
+            if loss_minus.isnan():
+                continue
+            loss1.append(loss_minus)
+            # print(f'loss:{loss}')
+            
+            # get variation sampling
+            soft_prompt_plus = soft_prompt + torch.matmul(random_variations, project_matrix)
+            loss_plus = compute_loss_concurrent(models, tokenizers, sys_prompt, soft_prompt_plus, data_temp, batch_size=batchsize//n_GPU, n_GPU=n_GPU)
+            if loss_plus.isnan():
+                continue
+            loss2.append(loss_plus)
+            # print(f'loss_plus:{loss_plus}')
+            # get loss difference
+            loss_diff = (loss_plus - loss_minus) / 2
+            # compute zero-order gradient
+            gradient = (loss_diff / variation_scale * (dimension * learning_rate)) * random_directions
+            # update softprompt
+            m = beta1 * m + (1 - beta1) * gradient
+            m_hat = m / (1 - beta1 ** (iters+1))
+            soft_prompt_proj = soft_prompt_proj - m_hat - weight_decay * soft_prompt_proj * learning_rate
+            soft_prompt = torch.matmul(soft_prompt_proj, project_matrix)
+            # print(soft_prompt.shape, soft_prompt.isnan().any(), soft_prompt.isinf().any(), (soft_prompt < 0).any())
+            # print(m.isnan().any(), v.isnan().any(), m_hat.isnan().any(), v_hat.isnan().any(), (v_hat < 0).any())
+            # print(learning_rate, m_hat.abs().max(), torch.sqrt(v_hat).isnan().any(), torch.sqrt(v_hat).max()+epsilon)
+            # validation
+            if (iters + 1) % validate_every == 0:
+                validation_loss = compute_loss_concurrent(models, tokenizers, sys_prompt, soft_prompt, validation_data, batch_size=batchsize//n_GPU, n_GPU=n_GPU)
+                loss3.append(validation_loss)
+                print(f"Iteration {i}: loss1 {loss_minus}; loss2 {loss_plus}; Validation loss {validation_loss}")
+                sqdim = torch.sqrt(torch.tensor(dimension * 1.0))
+                grad_scale = torch.norm(gradient) / sqdim
+                pmp_scale = torch.norm(soft_prompt) / sqdim
+                update_scale = torch.norm(m_hat) / sqdim
+                print(f"Lr*Gradient scale: {grad_scale}; Update scale:{update_scale}; Softprompt scale: {pmp_scale}")
+            else:
+                print(f"Iteration {i}: loss1 {loss_minus}; loss2 {loss_plus}")
+            iters += 1
+    # if path does not exist, create the path
+    
+    with open(os.path.join(output_dir, f"logs.pt"), "wb") as f:
+        losses = {'loss1': loss1.copy(), 'loss2': loss2.copy(), 'loss3': loss3.copy()}
+        pickle.dump(losses, f)
+    # save the final softprompt
+    torch.save(soft_prompt, os.path.join(output_dir, f"softprompt_epoch_{true_epochs}.pt"))
     return soft_prompt
 
 import torch
@@ -300,18 +550,30 @@ with open('/mnt/data/xue.w/yutong/data/grade_school_math/data/train.jsonl', 'r')
 
 
 soft_prompt = torch.tensor(soft_prompt_init, dtype=torch.float32)
+# decomposition of soft_prompt: 1*7*4096 -> 1*7*10, 1*10*4096
+
 # zero_order_softprompt_tuning_twopoints_concurrent(models, tokenizers, sys_prompt, soft_prompt_init, data_train, data_test[:128], batchsize=128, epochs=10, learning_rate=1e-8, variation_scale=1e-3, output_dir="softprompt_tuning_bs_128_lr_1e-8_vs_1e-3", save_per_epochs=1, n_GPU=4)
 # zero_order_adam_concurrent(peft_models, tokenizers, sys_prompt, soft_prompt, data_train[:320], data_test[50:82], batchsize=32, maxIters=10, learning_rate=1e-7, variation_scale=1e-2, n_GPU=8)
 # grid search and save all results (including per-iter loss and final softprompt)
-learning_rates = [1e-5, 1e-6, 1e-7]
-variation_scales = [1e-1, 1e-2, 1e-3]
+# learning_rates = [1e-5, 1e-6, 1e-7]
+# variation_scales = [1e-1, 1e-2, 1e-3]
+weight_decays = [1e-2]
+learning_rates = [1e-5]
+# momentums = [0.9]
+variation_scales = [1e-3]
 epochs = 1
 batchsize = 32
 
-for learning_rate in learning_rates:
-    for variation_scale in variation_scales:
-        # set random seed
-        torch.manual_seed(0)
-        random.seed(0)
-        # zero_order_softprompt_tuning_twopoints_concurrent(peft_models, tokenizers, sys_prompt, soft_prompt_init, data_train[:320], data_test[50:82], batchsize=32, maxIters=10, learning_rate=1e-7, variation_scale=1e-2)
-        zero_order_adam_concurrent(peft_models, tokenizers, sys_prompt, soft_prompt, training_data=data_train, validation_data=data_test[:256], batchsize=256, epochs=epochs, learning_rate=learning_rate, variation_scale=variation_scale, n_GPU=8, output_dir=f'./results/tzo_adam_spt_lr_{learning_rate}_vs_{variation_scale}', save_per_epochs=1)
+for weight_decay in weight_decays:
+    # for momentum in momentums:
+    for learning_rate in learning_rates:
+        for variation_scale in variation_scales:
+            # print hyper-parameters
+            print(f"Learning rate: {learning_rate}; Variation scale: {variation_scale}; Weight decay: {weight_decay}")
+            # set random seed
+            torch.manual_seed(0)
+            random.seed(0)
+            # zero_order_softprompt_tuning_twopoints_concurrent(peft_models, tokenizers, sys_prompt, soft_prompt_init, data_train[:320], data_test[50:82], batchsize=32, maxIters=10, learning_rate=1e-7, variation_scale=1e-2)
+            # zero_order_msgd_concurrent(peft_models, tokenizers, sys_prompt, soft_prompt, training_data=data_train, validation_data=data_test[:256], batchsize=256, epochs=epochs, learning_rate=learning_rate, weight_decay=weight_decay, variation_scale=variation_scale, beta1=momentum, n_GPU=8, output_dir=f'./results/tzo_msgd_spt_lr_{learning_rate}_vs_{variation_scale}_mo_{momentum}_wd_{weight_decay}', save_per_epochs=1)
+            # zero_order_proj_msgd_concurrent(peft_models, tokenizers, sys_prompt, soft_prompt, torch.eye(7).unsqueeze(0), training_data=data_train, validation_data=data_test[:256], batchsize=256, epochs=epochs, learning_rate=learning_rate, weight_decay=weight_decay, variation_scale=variation_scale, beta1=momentum, n_GPU=8, output_dir=f'./results/tzo_proj_msgd_spt_lr_{learning_rate}_vs_{variation_scale}_mo_{momentum}_wd_{weight_decay}_tokendim_{7}', save_per_epochs=1)
+            zero_order_adam_2c_concurrent(peft_models, tokenizers, sys_prompt, soft_prompt, training_data=data_train, validation_data=data_test[:256], batchsize=256, epochs=epochs, learning_rate=learning_rate, weight_decay=weight_decay, variation_scale=variation_scale, n_GPU=8, output_dir=f'./results/tzo_adam_2c_spt_lr_{learning_rate}_vs_{variation_scale}_wd_{weight_decay}', save_per_epochs=1, validate_every=1)
